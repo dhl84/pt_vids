@@ -1,0 +1,11 @@
+[project]
+name = "pt-cutlist"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mlx-whisper",
+    "pillow>=12.2.0",
+    "requests",
+]
