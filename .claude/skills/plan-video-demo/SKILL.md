@@ -135,7 +135,7 @@ were all hard-won and must stay automatic:
 - **Sanitize EVERY audio source, not just the trainer's mic** (hard lesson).
   The mute spans were originally built only from the *trainer's* transcript — but
   the gate then plays the *client's* lav during their replies, exposing their
-  off-topic talk (e.g. a wife's-pregnancy chat, sports banter). Conversations are
+  off-topic talk (e.g. personal/family news, off-topic banter). Conversations are
   two-sided and **timed differently on each mic**, so the client's off-topic
   won't line up with the trainer-based mutes. Therefore: **transcribe BOTH lavs**,
   and for the client lav scan the cues that are *gated (they play) AND not already

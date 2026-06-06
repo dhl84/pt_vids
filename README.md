@@ -39,7 +39,7 @@ Examples:
 
 ```sh
 # mic + a folder of camera clips (sync anchor auto-detected):
-./process_session.sh ~/Downloads/pt/28-may-26/REC00003.wav ~/Downloads/pt/28-may-26
+./process_session.sh ~/pt/session/trainer_mic.wav ~/pt/session
 
 # mic + explicit clips:
 ./process_session.sh mic.wav clipA.MP4 clipB.MP4 clipC.MP4
