@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,7 +32,7 @@ import requests
 # (containing config.json + weights.safetensors), e.g. on a flaky network.
 WHISPER_MODEL = os.environ.get(
     "WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
-OLLAMA_MODEL = "qwen3.6:35b-a3b-coding-mxfp8"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:35b-a3b-coding-mxfp8")
 OLLAMA_URL = "http://localhost:11434/api/generate"
 BATCH_SIZE = 10            # segments per classification call
 SILENCE_GAP_MS = 5000      # gaps larger than this between cues -> KEEP (silent reps)
@@ -91,9 +92,14 @@ def extract_audio(src: Path) -> Path:
 
 
 def transcribe(audio: Path, srt_path: Path) -> None:
-    """Transcribe audio to SRT with mlx-whisper."""
+    """Transcribe audio to SRT with mlx-whisper. Skips if a non-empty SRT already
+    exists (re-runs after tuning the model/cuts shouldn't redo the ~5-min pass)."""
     import mlx_whisper
 
+    if srt_path.exists() and srt_path.stat().st_size > 0:
+        print(f"[whisper] {srt_path.name} exists — skipping transcription "
+              f"(delete it to force a re-transcribe)")
+        return
     print(f"[whisper] transcribing with {WHISPER_MODEL} (this takes a while)...")
     result = mlx_whisper.transcribe(
         str(audio),
@@ -169,21 +175,82 @@ segment, in order:
 [{"index": <int>, "label": "KEEP"|"CUT", "reason": "<short>"}]"""
 
 
-def _ollama(prompt: str) -> str:
+# Enforce the array shape via Ollama structured output. Plain `format: "json"`
+# lets some models (e.g. gemma4) emit a single object instead of the per-segment
+# array, which then parses as "no labels" -> everything defaults to KEEP.
+CLASSIFY_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "index": {"type": "integer"},
+            "label": {"type": "string", "enum": ["KEEP", "CUT"]},
+            "reason": {"type": "string"},
+        },
+        "required": ["index", "label", "reason"],
+    },
+}
+
+
+# Per-batch stall monitoring. A healthy classify call streams tokens
+# continuously and finishes in a few seconds (qwen ~3s warm). Two failure modes
+# seen in practice: a hung request (no tokens at all) and a model looping on junk
+# tokens (gemma4). STALL_S bounds the first (read timeout = max gap between
+# tokens; generous enough to cover a cold model load before the first token).
+# BATCH_BUDGET_S bounds the second (total wall-clock for one batch).
+STALL_S = 60.0
+BATCH_BUDGET_S = 150.0
+
+
+def _consume_stream(lines, budget_s: float, now=time.monotonic) -> str:
+    """Join an Ollama streaming response, aborting if the batch overruns
+    `budget_s` (a model stalling/looping). Raises requests.Timeout on overrun so
+    the caller's normal request-failure handling (retry, then default-KEEP)
+    catches it. `now` is injectable for testing."""
+    start = now()
+    parts = []
+    for line in lines:
+        if not line:
+            continue
+        obj = json.loads(line)
+        parts.append(obj.get("response", ""))
+        if obj.get("done"):
+            break
+        if now() - start > budget_s:
+            raise requests.exceptions.Timeout(
+                f"classify batch exceeded {budget_s:.0f}s — model stalling, aborting")
+    return "".join(parts)
+
+
+def _ollama(prompt: str, n: int) -> str:
+    # Bound the array to exactly `n` items: an unbounded array schema lets some
+    # models (gemma4) never emit the closing `]` and generate thousands of junk
+    # objects until timeout. Fixing the count forces the grammar to terminate.
+    schema = {**CLASSIFY_SCHEMA, "minItems": n, "maxItems": n}
+    # Stream so a stall is caught mid-flight: the (connect, read) timeout aborts
+    # if no token arrives for STALL_S, and _consume_stream caps total wall-clock.
     resp = requests.post(
         OLLAMA_URL,
         json={
             "model": OLLAMA_MODEL,
             "system": SYSTEM_PROMPT,
             "prompt": prompt,
-            "stream": False,
-            "format": "json",
-            "options": {"temperature": 0},
+            "stream": True,
+            "format": schema,
+            # No chain-of-thought: this is a direct labelling task, and on a
+            # hybrid model (qwen3.6) reasoning tokens eat the whole token budget
+            # and leave the response empty. Off = direct JSON, and faster.
+            "think": False,
+            # ~64 tokens/segment is ample for index+label+short reason; also a
+            # hard backstop against a single runaway "reason" string.
+            "options": {"temperature": 0, "num_predict": 64 * n + 128},
         },
-        timeout=600,
+        stream=True,
+        timeout=(10, STALL_S),
     )
     resp.raise_for_status()
-    return resp.json()["response"]
+    with resp:
+        return _consume_stream(resp.iter_lines(), BATCH_BUDGET_S)
 
 
 def _extract_json_array(text: str) -> list | None:
@@ -218,7 +285,7 @@ def classify_batch(batch: list[Segment]) -> None:
     parsed = None
     for attempt in range(2):  # one retry on bad JSON
         try:
-            parsed = _extract_json_array(_ollama(prompt))
+            parsed = _extract_json_array(_ollama(prompt, len(batch)))
         except requests.RequestException as e:
             print(f"  [warn] ollama request failed: {e}")
             parsed = None
@@ -503,6 +570,112 @@ def build_final_cut(folder, trainer_mic, user_mic=None, mute_spans=None,
     return D / "final_cut_dissolves.fcpxml"
 
 
+# --- resource preflight ---------------------------------------------------
+#
+# The classification model is large (~tens of GB). If it doesn't fit in free
+# RAM it gets paged to swap, and the whole machine — plus anything else open,
+# like a Final Cut Pro export — grinds to a crawl for hours. We learned this the
+# hard way, so refuse to start (or to enter the classification phase) when memory
+# is already exhausted, and tell the user to free some up and re-run.
+# Override with PT_SKIP_RESOURCE_CHECK=1 to proceed anyway (accepts swapping).
+
+def _macos_mem_stats() -> dict | None:
+    """Memory stats in bytes on macOS, or None if not measurable here."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        def _sysctl(key: str) -> int:
+            return int(subprocess.run(["sysctl", "-n", key],
+                                      capture_output=True, text=True).stdout.strip())
+        page = _sysctl("hw.pagesize")
+        total = _sysctl("hw.memsize")
+        vm = subprocess.run(["vm_stat"], capture_output=True, text=True).stdout
+        def pages(label: str) -> int:
+            m = re.search(rf"{re.escape(label)}:\s+(\d+)\.", vm)
+            return int(m.group(1)) * page if m else 0
+        # memory reclaimable without swapping out active anonymous pages
+        available = (pages("Pages free") + pages("Pages inactive")
+                     + pages("Pages speculative") + pages("Pages purgeable"))
+        swap = subprocess.run(["sysctl", "-n", "vm.swapusage"],
+                              capture_output=True, text=True).stdout
+        sm = re.search(r"used\s*=\s*([\d.]+)M.*free\s*=\s*([\d.]+)M", swap)
+        swap_used = float(sm.group(1)) * 1024**2 if sm else 0.0
+        swap_free = float(sm.group(2)) * 1024**2 if sm else 0.0
+        return {"total": total, "available": available,
+                "swap_used": swap_used, "swap_free": swap_free}
+    except Exception:
+        return None
+
+
+def _ollama_model_bytes() -> tuple[int | None, bool]:
+    """(model size in bytes or None, already-loaded?) for OLLAMA_MODEL."""
+    base = OLLAMA_URL.rsplit("/api/", 1)[0]
+    size, loaded = None, False
+    try:
+        tags = requests.get(f"{base}/api/tags", timeout=5).json()
+        for m in tags.get("models", []):
+            if OLLAMA_MODEL in (m.get("name"), m.get("model")):
+                size = int(m.get("size") or 0) or None
+                break
+    except Exception:
+        pass
+    try:
+        ps = requests.get(f"{base}/api/ps", timeout=5).json()
+        loaded = any(OLLAMA_MODEL in (m.get("name"), m.get("model"))
+                     for m in ps.get("models", []))
+    except Exception:
+        pass
+    return size, loaded
+
+
+def preflight_resources(stage: str = "start") -> bool:
+    """True if there's enough free memory to load the classification model
+    without heavy swapping; otherwise print guidance and return False."""
+    if os.environ.get("PT_SKIP_RESOURCE_CHECK"):
+        return True
+    mem = _macos_mem_stats()
+    if not mem:
+        return True   # can't measure (non-macOS / probe failed) — don't block
+    size, loaded = _ollama_model_bytes()
+
+    GB = 1024 ** 3
+    # If the model is already resident, its RAM is committed — let it run.
+    need = 0 if loaded else (size or 0)
+    headroom = need * 1.10            # KV cache + runtime overhead
+    avail = mem["available"]
+
+    reasons = []
+    if need and avail < headroom:
+        reasons.append(
+            f"'{OLLAMA_MODEL}' needs ~{headroom/GB:.0f} GB free, "
+            f"but only {avail/GB:.1f} GB is available")
+    if mem["swap_used"] > 6 * GB and mem["swap_free"] < 2 * GB:
+        reasons.append(
+            f"the system is already swapping heavily "
+            f"({mem['swap_used']/GB:.1f} GB used, {mem['swap_free']/GB:.1f} GB free)")
+    if not reasons:
+        return True
+
+    where = ("not starting" if stage == "start"
+             else "pausing before classification")
+    print()
+    print("=" * 72)
+    print(f"INSUFFICIENT MEMORY — {where}")
+    for r in reasons:
+        print(f"  - {r}")
+    print(f"\n  total RAM {mem['total']/GB:.0f} GB | available {avail/GB:.1f} GB "
+          f"| swap used {mem['swap_used']/GB:.1f} GB")
+    print("\n  Running now would force the model into swap and grind the whole")
+    print("  machine (and any open app like Final Cut Pro) to a crawl for hours.")
+    print("\n  Free up memory, then re-run the SAME command:")
+    print("    - quit memory-heavy apps (Final Cut Pro, browsers, Docker, VMs)")
+    print("    - or wait for a running export/render to finish")
+    print("    - to proceed anyway and accept swapping: "
+          "set PT_SKIP_RESOURCE_CHECK=1")
+    print("=" * 72)
+    return False
+
+
 # --- driver ---------------------------------------------------------------
 
 def main() -> int:
@@ -528,6 +701,13 @@ def main() -> int:
                          "restore (e.g. after a visual review). Any CUT range "
                          "covering one of these is turned back into KEEP")
     args = ap.parse_args()
+
+    # Heads-up if there isn't enough free RAM for the classification model.
+    # Transcription + sync are cheap and never thrash, so we still run them and
+    # cache the SRT; the hard gate is re-checked before classification (which
+    # self-skips and tells you to re-run when memory frees). This keeps the
+    # cheap work from being wasted when RAM is tight at launch.
+    preflight_resources("start")
 
     src = Path(args.audio).expanduser()
     if not src.exists():
@@ -587,6 +767,11 @@ def main() -> int:
         for s in segments[:3]:
             print(f"  {ms_to_tc(s.start_ms)} {s.text[:70]}")
 
+    # Re-check right before the memory-heavy classification step: transcription
+    # + sync took a few minutes, during which another app may have eaten the RAM.
+    if not preflight_resources("classify"):
+        print("[classify] skipped — SRT is saved; re-run when memory frees up.")
+        return 2
     classify(segments)
     ranges = merge_ranges(segments)
     if args.keep:

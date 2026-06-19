@@ -155,13 +155,20 @@ def build_model(rec_path: Path, videos: list[Path],
     """
     rec_env = media_envelope(rec_path, fps=fps)
 
-    # 1. coarse-locate each clip's start to establish timeline order
+    # 1. coarse-locate each clip's start to establish timeline order.
+    # Use the best-scoring of several windows per clip: a single mid-clip window
+    # can land on quiet/ambiguous audio (low score) and mislocate by minutes,
+    # which would corrupt the timeline order and every downstream cut.
     clips = []
     for v in videos:
         dur = ffprobe_duration(v)
-        mid = min(dur * 0.5, max(0.0, dur - win_s))
-        rec_s, sc = _locate(rec_env, v, mid, min(win_s, dur), fps)
-        clips.append({"path": v, "dur": dur, "start_rec": rec_s - mid})
+        cand = []
+        for frac in (0.15, 0.5, 0.85):
+            ws = max(0.0, min(dur - win_s, dur * frac))
+            rec_s, sc = _locate(rec_env, v, ws, min(win_s, dur), fps)
+            cand.append((sc, rec_s - ws))
+        _, start_rec = max(cand)                 # most confident window wins
+        clips.append({"path": v, "dur": dur, "start_rec": start_rec})
     clips.sort(key=lambda c: c["start_rec"])     # timeline order = order in rec
 
     # 2. assign each clip its timeline start (cumulative duration)
