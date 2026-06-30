@@ -4,10 +4,12 @@ Transcribes an hour-long personal-training session and produces a review-ready
 list of sections to remove (rest chatter, setup fumbling, off-topic talk).
 
 Pipeline: extract audio -> transcribe (SRT) -> parse -> classify KEEP/CUT
-via local Ollama -> merge into ranges -> write review.md + cuts.txt.
+via local Ollama -> merge into ranges -> cut silent camera-repositioning gaps
+the audio can't see (flag_camera_motion) -> write review.md + cuts.txt.
 
 Conservative by design: when in doubt, KEEP. It is worse to drop coaching
-than to leave in filler.
+than to leave in filler — and the camera-motion pass only cuts a silent gap
+when the *camera itself* is clearly moving, never a static gap (quiet reps).
 
 Usage:
     uv run main.py path/to/session.mp4
@@ -36,6 +38,24 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:35b-a3b-coding-mxfp8")
 OLLAMA_URL = "http://localhost:11434/api/generate"
 BATCH_SIZE = 10            # segments per classification call
 SILENCE_GAP_MS = 5000      # gaps larger than this between cues -> KEEP (silent reps)
+# A silent gap is *usually* the client doing quiet reps (keep it). But it can
+# also be dead footage — the camera being picked up, carried, and repositioned
+# between sets (also silent, but useless). Audio can't tell them apart; the
+# video can: a mounted camera barely changes frame-to-frame, a carried one
+# changes wholesale. We probe long silent gaps and cut the ones in motion.
+CAMERA_MOTION_MIN_GAP_S = 8.0     # only inspect silent KEEP gaps at least this long
+# We detect *global* camera translation (the whole frame shifting together) via
+# FFT phase correlation between successive downscaled frames — NOT raw pixel
+# change, which a subject moving in a fixed frame also produces (explosive reps
+# read as high pixel-change but near-zero global translation). A frame-pair
+# whose global shift is >= CAMERA_PAN_PX counts as "the camera moved"; if more
+# than CAMERA_MOVING_FRAC of a silent gap's pairs moved, it's repositioning, cut.
+CAMERA_PAN_PX = 2.0               # global shift (px, at the 96x54 proxy) = "moved"
+# Conservative by design (prime directive: never drop reps). In testing explosive
+# reps peaked at ~0.24 and real repositioning ran 0.26–0.52, so 0.35 cuts clear
+# repositioning without touching reps. Rig/scene vary — tune per the [motion] log
+# line (prints the measured fraction for every gap) via PT_CAMERA_MOVING_FRAC.
+CAMERA_MOVING_FRAC = float(os.environ.get("PT_CAMERA_MOVING_FRAC", "0.35"))
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".m4v"}
 AUDIO_EXTS = {".wav", ".m4a", ".mp3", ".flac", ".aac"}
 
@@ -350,6 +370,81 @@ def merge_ranges(segments: list[Segment]) -> list[Range]:
              seg.label, seg.reason if seg.label == "CUT" else "")
         cursor = max(cursor, seg.end_ms)
 
+    return ranges
+
+
+def _camera_pan_px(clip: Path, off_s: float, dur_s: float,
+                   fps: int = 4) -> list[float]:
+    """Per-frame-pair global translation magnitude (px) over [off_s, +dur_s] of
+    `clip`, via FFT phase correlation on 96x54 gray frames. A panning/carried
+    camera shifts the whole frame (clear correlation peak off-centre); a subject
+    moving in a fixed frame does not. Returns [] if fewer than 2 frames decode."""
+    import numpy as np
+    W, H = 96, 54
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-ss", f"{off_s:.3f}", "-t", f"{dur_s:.3f}",
+         "-i", str(clip), "-vf", f"fps={fps},scale={W}:{H},format=gray",
+         "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+        capture_output=True).stdout
+    n = len(raw) // (W * H)
+    if n < 2:
+        return []
+    f = np.frombuffer(raw[:n * W * H], np.uint8).reshape(n, H, W).astype(np.float32)
+    mags = []
+    for a, b in zip(f[:-1], f[1:]):
+        A = np.fft.rfft2(a - a.mean())
+        B = np.fft.rfft2(b - b.mean())
+        R = A * np.conj(B)
+        R /= np.abs(R) + 1e-8
+        c = np.fft.irfft2(R, s=a.shape)
+        py, px = np.unravel_index(int(np.argmax(c)), c.shape)
+        dy = py - (H if py > H // 2 else 0)      # wrap negative shifts
+        dx = px - (W if px > W // 2 else 0)
+        mags.append(float((dx * dx + dy * dy) ** 0.5))
+    return mags
+
+
+def flag_camera_motion(ranges: list[Range], model, videos: list[Path],
+                       pan_fn=_camera_pan_px) -> list[Range]:
+    """Flip long *silent* KEEP gaps to CUT when the camera is being carried /
+    repositioned between sets — dead footage that audio classification can't see
+    (no dialogue) and that the 'silent gap = quiet reps' default wrongly keeps.
+    Static-camera silent gaps (real quiet reps) stay KEEP. Needs the sync model
+    to map timeline time -> clip + in-clip offset.
+    """
+    by = {Path(p).name: p for p in videos}
+    clips = model.clips                              # [(name, timeline_start_s)]
+    starts = [s for _, s in clips] + [model.timeline_end]
+    durs = [starts[i + 1] - starts[i] for i in range(len(clips))]
+
+    flipped = 0
+    for r in ranges:
+        # only untouched silent gaps (KEEP with no classifier reason)
+        if r.label != "KEEP" or r.reason:
+            continue
+        a, b = r.start_ms / 1000.0, r.end_ms / 1000.0
+        if b - a < CAMERA_MOTION_MIN_GAP_S:
+            continue
+        # a gap can straddle a clip boundary (DJI auto-splits mid-recording) —
+        # collect pan magnitudes across every clip slice it covers.
+        mags = []
+        for (name, start), dur in zip(clips, durs):
+            lo, hi = max(a, start), min(b, start + dur)
+            if hi - lo >= 1.0 and name in by:
+                mags += pan_fn(by[name], lo - start, hi - lo)
+        if not mags:
+            continue
+        frac = sum(1 for m in mags if m >= CAMERA_PAN_PX) / len(mags)
+        moving = frac >= CAMERA_MOVING_FRAC
+        print(f"[motion] silent gap {ms_to_tc(r.start_ms)}–{ms_to_tc(r.end_ms)} "
+              f"moving={frac:.2f} (thresh {CAMERA_MOVING_FRAC:.2f}) -> "
+              f"{'CUT camera repositioning' if moving else 'KEEP (reps)'}")
+        if moving:
+            r.label = "CUT"
+            r.reason = "Camera repositioning / dead footage (no dialogue, camera in motion)"
+            flipped += 1
+    if flipped:
+        print(f"[motion] cut {flipped} silent camera-repositioning gap(s)")
     return ranges
 
 
@@ -774,6 +869,8 @@ def main() -> int:
         return 2
     classify(segments)
     ranges = merge_ranges(segments)
+    if sync_model is not None:
+        ranges = flag_camera_motion(ranges, sync_model, videos)
     if args.keep:
         ranges = apply_force_keep(ranges, args.keep)
     write_outputs(ranges, src, timeline_ms)

@@ -97,9 +97,24 @@ cut list without this pass.
 - Flag **false positives**: any cut where the client is performing or the coach
   is demonstrating. Also scan KEEP ranges for shots an unrelated gym member
   dominates (cuts you might *add*).
-- Then grill the **one genuine editorial fork** for exercise-overlap cuts:
-  **restore to KEEP (keep the footage)** [recommended], **keep video + flag the
-  off-topic audio to mute/duck later**, or **cut anyway (coaching-audio-only)**.
+- **Also sample long silent KEEP gaps.** A silent gap defaults to KEEP ("quiet
+  reps"), and `flag_camera_motion` auto-cuts the ones where the camera is clearly
+  being carried/repositioned — but it is deliberately conservative (cut only when
+  >35% of frames show global pan, so it never drops reps) and **will miss brief
+  or low-texture repositioning** (camera pointed at a wall/floor reads as static).
+  So extract frames across every silent KEEP gap ≥8s too, and **cut the dead
+  ones** — walking with the camera, repositioning between sets, aiming/adjusting,
+  nothing happening. These are the inverse of false positives: footage the audio
+  pass had no speech to cut on. Tune borderline rigs with `PT_CAMERA_MOVING_FRAC`.
+- **Default rule — mute the audio, don't cut the whole section, whenever the
+  video is worth keeping.** A span gets fully cut (video + audio) ONLY when both
+  are unwanted (genuine rest: standing/sitting/chatting, empty gym, an unrelated
+  member). If the client is training / mid-rep / the shot is otherwise good but
+  the *audio* is off-topic, **restore the video to KEEP and add the audio to
+  `mute_spans`** — never drop the footage just to lose the talk.
+- So the editorial fork for exercise-overlap cuts collapses to: **restore to KEEP
+  + mute the off-topic audio** [default], or — only if the footage itself is also
+  worthless — **cut anyway**. Don't keep unwanted audio playing.
 - Apply with `--keep <timecodes…>` on a re-run, or regenerate `review.md` /
   `cuts.txt` / `cut_review.fcpxml` directly with the surviving cuts.
 
