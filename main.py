@@ -612,12 +612,18 @@ def build_final_cut(folder, trainer_mic, user_mic=None, mute_spans=None,
       • cross-dissolves at the cuts
 
     Writes <folder>/final_cut_dissolves.fcpxml and final_cut.fcpxml.
+
+    mute_spans defaults to <folder>/mute_spans.json (written by the visual
+    review pass: off-topic audio over kept training footage) when present.
     """
     import re
     import fcpxml
     import sync
 
     D = Path(folder)
+    if mute_spans is None and (D / "mute_spans.json").exists():
+        mute_spans = [tuple(s) for s in json.loads((D / "mute_spans.json").read_text())]
+        print(f"[final] {len(mute_spans)} mute span(s) from mute_spans.json")
     mic = D / trainer_mic
     videos_on_disk = sorted(p for p in D.iterdir() if p.suffix.lower() in VIDEO_EXTS)
     model = sync.build_model(mic, videos_on_disk)
@@ -795,6 +801,12 @@ def main() -> int:
                     help="force-KEEP: timecode(s) HH:MM:SS[,mmm] of cuts to "
                          "restore (e.g. after a visual review). Any CUT range "
                          "covering one of these is turned back into KEEP")
+    ap.add_argument("--labels", metavar="JSON",
+                    help="skip the local Ollama model: apply KEEP/CUT labels "
+                         'from a JSON file ([{"index":N,"label":"KEEP"|"CUT",'
+                         '"reason":"…"}], index = SRT cue number) produced by '
+                         "an external classifier (e.g. Claude reading the SRT). "
+                         "Needs no RAM, so the memory preflight is skipped")
     args = ap.parse_args()
 
     # Heads-up if there isn't enough free RAM for the classification model.
@@ -802,7 +814,8 @@ def main() -> int:
     # cache the SRT; the hard gate is re-checked before classification (which
     # self-skips and tells you to re-run when memory frees). This keeps the
     # cheap work from being wasted when RAM is tight at launch.
-    preflight_resources("start")
+    if not args.labels:
+        preflight_resources("start")
 
     src = Path(args.audio).expanduser()
     if not src.exists():
@@ -862,12 +875,18 @@ def main() -> int:
         for s in segments[:3]:
             print(f"  {ms_to_tc(s.start_ms)} {s.text[:70]}")
 
-    # Re-check right before the memory-heavy classification step: transcription
-    # + sync took a few minutes, during which another app may have eaten the RAM.
-    if not preflight_resources("classify"):
-        print("[classify] skipped — SRT is saved; re-run when memory frees up.")
-        return 2
-    classify(segments)
+    if args.labels:
+        n = apply_labels(segments, Path(args.labels))
+        print(f"[classify] applied {n} external labels from {args.labels} "
+              f"({sum(1 for s in segments if s.label == 'CUT')} CUT)")
+    else:
+        # Re-check right before the memory-heavy classification step:
+        # transcription + sync took a few minutes, during which another app may
+        # have eaten the RAM.
+        if not preflight_resources("classify"):
+            print("[classify] skipped — SRT is saved; re-run when memory frees up.")
+            return 2
+        classify(segments)
     ranges = merge_ranges(segments)
     if sync_model is not None:
         ranges = flag_camera_motion(ranges, sync_model, videos)
@@ -878,6 +897,20 @@ def main() -> int:
         extra_audios = align_extra_mics(args.sync_mic, src, sync_model)
         emit_fcpxml(src, sync_model, ranges, extra_audios, style=args.cut_style)
     return 0
+
+
+def apply_labels(segments: list[Segment], path: Path) -> int:
+    """Apply external KEEP/CUT labels ([{"index","label","reason"}], index =
+    SRT cue number) to segments. Unlisted cues keep their default (KEEP).
+    Returns how many segments were labelled."""
+    lab = {o["index"]: o for o in json.loads(path.read_text())}
+    n = 0
+    for s in segments:
+        if s.index in lab:
+            s.label = lab[s.index]["label"]
+            s.reason = lab[s.index].get("reason", "")
+            n += 1
+    return n
 
 
 def apply_force_keep(ranges: list[Range], keeps: list[str]) -> list[Range]:

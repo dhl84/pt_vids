@@ -23,7 +23,21 @@ def test_stalling_model_is_aborted():
         pass
 
 
+def test_apply_labels_external_classifier(tmp_path=None):
+    import json
+    import tempfile
+    from pathlib import Path
+    segs = [main.Segment(i, i * 1000, i * 1000 + 900, f"cue {i}") for i in (1, 2, 3)]
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump([{"index": 2, "label": "CUT", "reason": "chatter"}], f)
+    n = main.apply_labels(segs, Path(f.name))
+    assert n == 1
+    assert [s.label for s in segs] == ["KEEP", "CUT", "KEEP"]  # unlisted stay KEEP
+    assert segs[1].reason == "chatter"
+
+
 if __name__ == "__main__":
     test_normal_stream_joins_response()
     test_stalling_model_is_aborted()
+    test_apply_labels_external_classifier()
     print("ok")

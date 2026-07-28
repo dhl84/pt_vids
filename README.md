@@ -117,6 +117,30 @@ Each CUT range covering one of those timecodes is turned back into KEEP.
 > where the classifier timed out are left as KEEP, so they won't appear as cut
 > markers — they simply stay in.
 
+### External classifier (`--labels`)
+
+When the local Ollama model can't run (e.g. the RAM is taken by other jobs) or
+you want a stronger model to make the calls, skip Ollama entirely: have the
+external model (e.g. Claude reading the SRT) write a JSON labels file and pass
+it with `--labels`:
+
+```sh
+uv run main.py mic.wav --sync-ref clips --labels labels.json
+# labels.json: [{"index": 131, "label": "CUT", "reason": "rest chatter"}, …]
+```
+
+`index` is the SRT cue number; omitted cues stay KEEP (the conservative
+default), so listing only the CUTs is enough. The memory preflight is skipped —
+this path needs no RAM.
+
+### Mute instead of cut (`mute_spans.json`)
+
+Coaches chat off-topic while the client trains, so the visual review often
+turns a proposed cut into "keep the footage, silence the talk". Save those
+spans next to the mic as `mute_spans.json` (`[[start_s, end_s], …]`, timeline
+seconds) — `build_final_cut` picks the file up automatically and silences
+whichever mic plays inside each span.
+
 ## How sync works
 
 The mic and camera run on independent clocks, so the mic's t=0 is not the
