@@ -157,6 +157,20 @@ deviation of any window from the fitted line = your alignment accuracy). A
 residual of a few ms is sub-frame. If confidence is low or residual large, it
 warns you to verify the first cues against FCP.
 
+## Repo config (git identity)
+
+This is a personal repo (`github.com/dhl84/pt_vids`) — commits and pushes use
+the **dhl84** GitHub login, not the work account:
+
+```sh
+git config user.name "David Lee"
+git config user.email "8477196+dhl84@users.noreply.github.com"
+gh auth switch --user dhl84   # before any gh / git push operation
+```
+
+The identity is set repo-locally in `.git/config` (no global fallback exists on
+this machine, so skipping this produces hostname junk like `davidlee@Mac.lan`).
+
 ## Config (env or top of `main.py`)
 
 - `WHISPER_MODEL` — HF repo id, or a local model dir (default the bundled copy)
