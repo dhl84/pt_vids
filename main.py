@@ -611,7 +611,7 @@ def build_final_cut(folder, trainer_mic, user_mic=None, mute_spans=None,
         (never both → no echo), auto-detected from the two lavs' energy
       • cross-dissolves at the cuts
 
-    Writes <folder>/final_cut_dissolves.fcpxml and final_cut.fcpxml.
+    Writes <folder>/final_cut_dissolves.fcpxml.
 
     mute_spans defaults to <folder>/mute_spans.json (written by the visual
     review pass: off-topic audio over kept training footage) when present.
@@ -662,13 +662,12 @@ def build_final_cut(folder, trainer_mic, user_mic=None, mute_spans=None,
                          fps_num=fmt["fps_num"], fps_den=fmt["fps_den"],
                          videos=vids, audios=audios, cuts=cuts,
                          project_name=f"{D.name} — FINAL CUT")
-    for name, dis in [("final_cut_dissolves.fcpxml", dissolve_s),
-                      ("final_cut.fcpxml", 0.0)]:
-        out = fcpxml.build_applied(tl, D / name, mute_spans=mute_spans,
-                                   dissolve_s=dis, gate_user_spans=gate)
-        ok, msg = fcpxml.validate(out)
-        print(f"[final] {name}: {'valid' if ok else 'INVALID: ' + msg}")
-    return D / "final_cut_dissolves.fcpxml"
+    out = fcpxml.build_applied(tl, D / "final_cut_dissolves.fcpxml",
+                               mute_spans=mute_spans, dissolve_s=dissolve_s,
+                               gate_user_spans=gate)
+    ok, msg = fcpxml.validate(out)
+    print(f"[final] {out.name}: {'valid' if ok else 'INVALID: ' + msg}")
+    return out
 
 
 # --- resource preflight ---------------------------------------------------
