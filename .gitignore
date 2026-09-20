@@ -35,3 +35,7 @@ _edit/
 
 # Compiled Swift helper (rebuild with: swiftc -O -o tools/persondetect tools/PersonDetect.swift)
 tools/persondetect
+
+# Native arm64 ffmpeg (52MB; see tools/bin/README for how to fetch)
+tools/bin/*
+!tools/bin/README.md

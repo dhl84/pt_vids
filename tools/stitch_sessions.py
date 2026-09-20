@@ -37,6 +37,21 @@ SAMPLE_WIDTH = 640    # downscale for detection only
 SESSION_GAP = 120 * 60   # a break this long starts a new PT session
 
 
+def group_by_day(source: Path) -> dict:
+    """All clips under source, grouped by Korea-local calendar date."""
+    days: dict[str, list] = defaultdict(list)
+    for p in sorted(source.rglob("*")):
+        if p.suffix.lower() not in {".mp4", ".mov"}:
+            continue
+        dur, created = probe(p)
+        if not created:
+            print(f"skip (no creation_time): {p}", file=sys.stderr)
+            continue
+        local = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%f%z").astimezone(KST)
+        days[local.strftime("%Y-%m-%d")].append((local, p, dur))
+    return days
+
+
 def split_sessions(entries: list) -> list[list]:
     """Split one day's clips into PT sessions on a long break."""
     sessions: list[list] = [[]]
@@ -189,21 +204,10 @@ def main() -> int:
                     help="comma-separated YYYY-MM-DD to rebuild, default all")
     args = ap.parse_args()
 
-    clips = sorted(p for p in args.source.rglob("*")
-                   if p.suffix.lower() in {".mp4", ".mov"})
-    if not clips:
+    days = group_by_day(args.source)
+    if not days:
         print(f"no clips under {args.source}", file=sys.stderr)
         return 1
-
-    # group by Korea-local calendar date
-    days: dict[str, list] = defaultdict(list)
-    for p in clips:
-        dur, created = probe(p)
-        if not created:
-            print(f"skip (no creation_time): {p}", file=sys.stderr)
-            continue
-        local = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%f%z").astimezone(KST)
-        days[local.strftime("%Y-%m-%d")].append((local, p, dur))
 
     args.outdir.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="stitch-"))
