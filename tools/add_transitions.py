@@ -33,6 +33,10 @@ FFMPEG = str(Path(__file__).parent / "bin" / "ffmpeg")   # native arm64 build
 XFADE = 0.75          # dissolve length, seconds
 BREAK_GAP = 10.0      # a removed stretch this long earns a dissolve
 BITRATE = "60M"       # matches the GoPro originals at 4K60
+# concat emits timebase 1/1000000 while a raw input is 1/60000, and xfade
+# refuses to join two links whose timebases differ. Pin every branch to the
+# camera's own timebase.
+TB = "1/60000"
 
 
 def build(segments: list[tuple[Path, float, float, bool]], dst: Path) -> None:
@@ -48,7 +52,7 @@ def build(segments: list[tuple[Path, float, float, bool]], dst: Path) -> None:
 
     fc = []
     for i, (_, a, b, _) in enumerate(segments):
-        fc.append(f"[{i}:v]setpts=PTS-STARTPTS[v{i}]")
+        fc.append(f"[{i}:v]setpts=PTS-STARTPTS,settb={TB}[v{i}]")
         fc.append(f"[{i}:a]asetpts=PTS-STARTPTS[a{i}]")
 
     vcur, acur = "v0", "a0"
@@ -62,7 +66,7 @@ def build(segments: list[tuple[Path, float, float, bool]], dst: Path) -> None:
             fc.append(f"[{acur}][a{i}]acrossfade=d={XFADE}[ax{i}]")
             run = run + dur - XFADE
         else:
-            fc.append(f"[{vcur}][v{i}]concat=n=2:v=1:a=0[vx{i}]")
+            fc.append(f"[{vcur}][v{i}]concat=n=2:v=1:a=0,settb={TB}[vx{i}]")
             fc.append(f"[{acur}][a{i}]concat=n=2:v=0:a=1[ax{i}]")
             run = run + dur
         vcur, acur = f"vx{i}", f"ax{i}"
@@ -77,7 +81,12 @@ def build(segments: list[tuple[Path, float, float, bool]], dst: Path) -> None:
             "-color_trc", "bt709",
             "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
             "-movflags", "+faststart", str(dst)]
-    subprocess.run(cmd, capture_output=True, check=True)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode:
+        # ffmpeg says why on stderr; without this the traceback shows only an
+        # exit code and a 4000-character command line.
+        tail = "\n".join(r.stderr.strip().splitlines()[-12:])
+        raise RuntimeError(f"ffmpeg failed ({r.returncode}) on {dst.name}:\n{tail}")
 
 
 def main() -> int:
