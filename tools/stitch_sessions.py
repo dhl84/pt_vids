@@ -34,7 +34,18 @@ SAMPLE_WIDTH = 640    # downscale for detection only
 # also the detection grid, so cuts land on keyframes and the video copies
 # bit-for-bit. Cut boundaries are accurate to ~1s; that is enough to drop a
 # 4-minute shot of a wall, and it keeps the original 4K60.
-GAP_SPLIT = 3 * 3600  # not used for grouping; reported only
+SESSION_GAP = 120 * 60   # a break this long starts a new PT session
+
+
+def split_sessions(entries: list) -> list[list]:
+    """Split one day's clips into PT sessions on a long break."""
+    sessions: list[list] = [[]]
+    for i, e in enumerate(entries):
+        if i and (e[0] - entries[i - 1][0]).total_seconds() \
+                - entries[i - 1][2] > SESSION_GAP:
+            sessions.append([])
+        sessions[-1].append(e)
+    return [s for s in sessions if s]
 
 
 def run(cmd: list[str]) -> str:
@@ -170,6 +181,12 @@ def main() -> int:
     ap.add_argument("outdir", type=Path)
     ap.add_argument("--dry-run", action="store_true",
                     help="report the cuts without encoding")
+    ap.add_argument("--keep-whole", default="",
+                    help="comma-separated clip names to never cut, for shots "
+                         "the person detector cannot read (e.g. a camera lying "
+                         "on its back, where people show only at the edge)")
+    ap.add_argument("--days", default="",
+                    help="comma-separated YYYY-MM-DD to rebuild, default all")
     args = ap.parse_args()
 
     clips = sorted(p for p in args.source.rglob("*")
@@ -192,44 +209,55 @@ def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="stitch-"))
     grand_in = grand_out = 0.0
 
+    keep_whole = {x for x in args.keep_whole.split(",") if x}
+    only = {x for x in args.days.split(",") if x}
+
     for day in sorted(days):
-        entries = sorted(days[day])
-        tags = sorted({e[1].parent.name for e in entries} - {args.source.name})
-        name = f"{day}_{'-'.join(tags) or 'session'}"
-        parts, day_in, day_out = [], 0.0, 0.0
-        print(f"\n=== {day}  ({len(entries)} clips)")
-
-        for idx, (_, path, dur) in enumerate(entries):
-            times = keyframe_times(path)
-            present = detect_people(path, work)
-            spans = keep_spans(present, times, dur)
-            kept = sum(e - s for s, e in spans)
-            day_in += dur
-            day_out += kept
-            pct = 100 * kept / dur if dur else 0
-            print(f"  {path.parent.name}/{path.name}  "
-                  f"{dur:7.1f}s -> {kept:7.1f}s ({pct:5.1f}%)  {len(spans)} span(s)")
-            if not spans or args.dry_run:
-                continue
-            if len(spans) == 1 and spans[0][1] - spans[0][0] >= dur - 0.05:
-                parts.append(path)          # nothing to cut: use the original
-            else:
-                part = work / f"{name}_{idx:03d}.mp4"
-                cut_copy(path, spans, part, work)
-                parts.append(part)
-
-        grand_in += day_in
-        grand_out += day_out
-        print(f"  --- day total: {day_in/60:.1f}min -> {day_out/60:.1f}min")
-        if args.dry_run or not parts:
+        if only and day not in only:
             continue
+        sessions = split_sessions(sorted(days[day]))
+        for sess_no, entries in enumerate(sessions, start=1):
+            tags = sorted({e[1].parent.name for e in entries} - {args.source.name})
+            suffix = f"_s{sess_no}" if len(sessions) > 1 else ""
+            name = f"{day}{suffix}_{'-'.join(tags) or 'session'}"
+            parts, day_in, day_out = [], 0.0, 0.0
+            print(f"\n=== {name}  ({len(entries)} clips)")
 
-        final = args.outdir / f"{name}.mp4"
-        concat_copy(parts, final, work)
-        for p in parts:
-            if p.parent == work:
-                p.unlink()             # never touch the originals
-        print(f"  wrote {final}  ({final.stat().st_size / 1e9:.1f} GB)")
+            for idx, (_, path, dur) in enumerate(entries):
+                if path.name in keep_whole:
+                    spans = [(0.0, dur)]
+                else:
+                    times = keyframe_times(path)
+                    present = detect_people(path, work)
+                    spans = keep_spans(present, times, dur)
+                kept = sum(e - s for s, e in spans)
+                day_in += dur
+                day_out += kept
+                pct = 100 * kept / dur if dur else 0
+                print(f"  {path.parent.name}/{path.name}  "
+                      f"{dur:7.1f}s -> {kept:7.1f}s ({pct:5.1f}%)  {len(spans)} span(s)")
+                if not spans or args.dry_run:
+                    continue
+                if len(spans) == 1 and spans[0][1] - spans[0][0] >= dur - 0.05:
+                    parts.append(path)          # nothing to cut: use the original
+                else:
+                    part = work / f"{name}_{idx:03d}.mp4"
+                    cut_copy(path, spans, part, work)
+                    parts.append(part)
+
+            grand_in += day_in
+            grand_out += day_out
+            print(f"  --- session total: {day_in/60:.1f}min -> {day_out/60:.1f}min")
+            if args.dry_run or not parts:
+                continue
+
+            final = args.outdir / f"{name}.mp4"
+            concat_copy(parts, final, work)
+            for p in parts:
+                if p.parent == work:
+                    p.unlink()             # never touch the originals
+            print(f"  wrote {final}  ({final.stat().st_size / 1e9:.1f} GB)")
+
 
     shutil.rmtree(work, ignore_errors=True)
     print(f"\nTOTAL: {grand_in/60:.1f}min -> {grand_out/60:.1f}min "
