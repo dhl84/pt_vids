@@ -30,10 +30,10 @@ MIN_DEAD = 5.0        # seconds with nobody visible before a stretch is cut
 PAD = 1.0             # seconds kept either side of a run of people
 MIN_KEEP = 2.0        # drop kept runs shorter than this (detector flicker)
 SAMPLE_WIDTH = 640    # downscale for detection only
-OUT_HEIGHT = 1080
-# ponytail: h264 not hevc — the installed ffmpeg is an x86_64 build under Rosetta
-# and cannot open the HEVC hardware encoder. Switch to hevc_videotoolbox if a
-# native arm64 ffmpeg gets installed.
+# ponytail: no re-encode at all. GoPro writes a keyframe every second, which is
+# also the detection grid, so cuts land on keyframes and the video copies
+# bit-for-bit. Cut boundaries are accurate to ~1s; that is enough to drop a
+# 4-minute shot of a wall, and it keeps the original 4K60.
 GAP_SPLIT = 3 * 3600  # not used for grouping; reported only
 
 
@@ -127,17 +127,41 @@ def keep_spans(present: list[bool], times: list[float], dur: float) -> list[tupl
     return merged
 
 
-def encode(src: Path, spans: list[tuple[float, float]], dst: Path) -> None:
-    expr = "+".join(f"between(t,{s:.3f},{e:.3f})" for s, e in spans)
+def cut_copy(src: Path, spans: list[tuple[float, float]], dst: Path,
+             work: Path) -> None:
+    """Copy the kept spans out of src without re-encoding.
+
+    Each span is copied on its own, then the pieces are joined with the concat
+    demuxer. The concat *filter* cannot be used here: it decodes, which would
+    throw away the original 4K60 stream.
+    """
+    pieces = []
+    for i, (a, b) in enumerate(spans):
+        piece = work / f"{dst.stem}_span{i:03d}{src.suffix}"
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+             "-ss", f"{a:.3f}", "-to", f"{b:.3f}", "-i", str(src),
+             "-map", "0:v:0", "-map", "0:a:0", "-c", "copy",
+             "-avoid_negative_ts", "make_zero", str(piece)],
+            capture_output=True, check=True)
+        pieces.append(piece)
+    if len(pieces) == 1:
+        pieces[0].rename(dst)
+        return
+    concat_copy(pieces, dst, work)
+    for q in pieces:
+        q.unlink()
+
+
+def concat_copy(parts: list[Path], dst: Path, work: Path) -> None:
+    listing = work / (dst.stem + ".txt")
+    listing.write_text("".join(f"file '{p}'\n" for p in parts))
     subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-         "-hwaccel", "videotoolbox", "-i", str(src),
-         "-vf", f"select='{expr}',setpts=N/FRAME_RATE/TB,scale=-2:{OUT_HEIGHT}",
-         "-af", f"aselect='{expr}',asetpts=N/SR/TB",
-         "-c:v", "h264_videotoolbox", "-b:v", "10M",
-         "-r", "60", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
-         "-map_metadata", "-1", str(dst)],
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat",
+         "-safe", "0", "-i", str(listing), "-c", "copy",
+         "-movflags", "+faststart", str(dst)],
         capture_output=True, check=True)
+    listing.unlink()
 
 
 def main() -> int:
@@ -187,9 +211,12 @@ def main() -> int:
                   f"{dur:7.1f}s -> {kept:7.1f}s ({pct:5.1f}%)  {len(spans)} span(s)")
             if not spans or args.dry_run:
                 continue
-            part = work / f"{name}_{idx:03d}.mp4"
-            encode(path, spans, part)
-            parts.append(part)
+            if len(spans) == 1 and spans[0][1] - spans[0][0] >= dur - 0.05:
+                parts.append(path)          # nothing to cut: use the original
+            else:
+                part = work / f"{name}_{idx:03d}.mp4"
+                cut_copy(path, spans, part, work)
+                parts.append(part)
 
         grand_in += day_in
         grand_out += day_out
@@ -197,17 +224,12 @@ def main() -> int:
         if args.dry_run or not parts:
             continue
 
-        listing = work / f"{name}.txt"
-        listing.write_text("".join(f"file '{p}'\n" for p in parts))
         final = args.outdir / f"{name}.mp4"
-        subprocess.run(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat",
-             "-safe", "0", "-i", str(listing), "-c", "copy", str(final)],
-            capture_output=True, check=True)
+        concat_copy(parts, final, work)
         for p in parts:
-            p.unlink()
-        listing.unlink()
-        print(f"  wrote {final}")
+            if p.parent == work:
+                p.unlink()             # never touch the originals
+        print(f"  wrote {final}  ({final.stat().st_size / 1e9:.1f} GB)")
 
     shutil.rmtree(work, ignore_errors=True)
     print(f"\nTOTAL: {grand_in/60:.1f}min -> {grand_out/60:.1f}min "
