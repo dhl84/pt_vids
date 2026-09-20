@@ -39,7 +39,12 @@ def build(segments: list[tuple[Path, float, float, bool]], dst: Path) -> None:
     """segments: (clip, start, end, dissolve_before). One encode pass."""
     cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y"]
     for clip, a, b, _ in segments:
-        cmd += ["-ss", f"{a:.3f}", "-to", f"{b:.3f}", "-i", str(clip)]
+        # -noautorotate: four clips carry rotation metadata (-90 or -180) that
+        # does not match the picture. The stored frames are already the right
+        # way up, so obeying the tag turns them on their side and makes xfade
+        # fail on a size mismatch against the rest of the session.
+        cmd += ["-noautorotate",
+                "-ss", f"{a:.3f}", "-to", f"{b:.3f}", "-i", str(clip)]
 
     fc = []
     for i, (_, a, b, _) in enumerate(segments):
