@@ -32,3 +32,6 @@ models/
 cuts.txt
 review.md
 _edit/
+
+# Compiled Swift helper (rebuild with: swiftc -O -o tools/persondetect tools/PersonDetect.swift)
+tools/persondetect
