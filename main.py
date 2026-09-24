@@ -125,6 +125,9 @@ def transcribe(audio: Path, srt_path: Path) -> None:
         str(audio),
         path_or_hf_repo=WHISPER_MODEL,
         verbose=False,
+        # WHISPER_LANG guards against auto-detect locking a wrong language from
+        # a noisy first 30s window (04-Aug-26: whole session came back Chinese).
+        language=os.environ.get("WHISPER_LANG", "en"),
     )
     write_srt(result["segments"], srt_path)
     print(f"[whisper] wrote {srt_path.name} ({len(result['segments'])} cues)")

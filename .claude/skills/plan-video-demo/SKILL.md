@@ -27,35 +27,28 @@ dependencies in order. Two rules layered on top:
 Front-load all of this **before** the long steps (transcription ~5 min,
 classification ~30–60 min) so you never burn an hour on the wrong mic or model.
 
-## Phase 1 — Grill the demo plan (intent shapes the cuts)
+## Phase 1 — Apply the standing intent (do NOT ask)
 
-Before any processing, resolve what the demo is *for* — it changes how
-aggressively to cut and what to protect. Ask these in a **single
-`AskUserQuestion` call**, recommended option first (per grill-me, lead with your
-recommendation):
+The intent is settled and does not change between sessions. **Do not run an
+`AskUserQuestion` call for purpose / tightness / tone** — the user answered these
+identically every session and asked (2026-08-12) for them to be the default. Just
+state the defaults in one line as you start, and proceed:
 
-```
-Q1  header: "Purpose"    "What is this demo for?"
-    - Trainer marketing reel            (Recommended)
-    - Client testimonial
-    - Technique reference / coaching library
-    - Full-session record
+| | standing default |
+| --- | --- |
+| **Purpose** | Full-session record |
+| **How tight** | Cut only genuinely dead footage; keep every training moment |
+| **Tone** | Coaching-only |
 
-Q2  header: "How tight"  "How aggressively should I cut?"
-    - Tight — cut all rest + off-topic, keep coaching & active reps   (Recommended)
-    - Highlights only — just the strongest coaching moments
-    - Light — only dead air and obvious filler
+Which resolves the Phase 3 fork to a single rule: **cut nothing that shows
+training.** A span loses its video only when the picture is dead — camera being
+carried/repositioned, empty frame, pack-up, an unrelated member filling the shot.
+All banter, off-topic tangents, and third-party personal talk are handled by
+**muting the audio and keeping the picture** (`mute_spans.json`).
 
-Q3  header: "Tone"       "Keep rapport, or coaching-only?"
-    - Keep a little banter for personality   (Recommended)
-    - Coaching-only — cut all banter
-```
-
-Then ask, free-form: **anything specific to definitely keep or remove?** (a
-featured exercise, banter to preserve, names/personal info to strip).
-
-Record every answer — they govern the "genuine rest vs keep the footage" calls
-in Phase 3, and how aggressively the exercise-overlap fork leans toward cutting.
+Ask only if the user says *this* session is different, or names something
+specific to keep/remove. If they do, follow that instead — one session's
+exception never rewrites the defaults above.
 
 ## Phase 2 — Resolve the technical tree (probe-first, ask rarely)
 
@@ -67,9 +60,14 @@ in Phase 3, and how aggressively the exercise-overlap fork leans toward cutting.
    trainer mic locks cleanly (low residual, sensible offset, low drift); the
    client lav produces garbage (huge residual). Transcribe the trainer mic.
    Report which you picked and the lock quality.
-3. **Models.** Recommend the local whisper weights
-   (`models/whisper-large-v3-turbo`, via `WHISPER_MODEL`) and Ollama
-   `qwen3.6:35b-a3b-coding-mxfp8`. Only ask/flag if missing.
+3. **Models.** Local whisper weights (`models/whisper-large-v3-turbo`, via
+   `WHISPER_MODEL`; English forced by default, override with `WHISPER_LANG`).
+   **Classification default: Claude classifies in-session from the full
+   transcript and writes `labels.json` for `--labels`** — zero RAM, full-session
+   context, skips the Ollama hour and the RAM preflight. Transcribe BOTH lavs up
+   front (the client-lav transcript is required for the Phase-4 mute
+   cross-check anyway). Ollama (`qwen3.6:35b-a3b-coding-mxfp8`, or
+   `gemma4:26b-a4b` when RAM is tight) is the fallback only if asked.
 4. **Timeline sync.** Auto by default — contiguous camera clips, anchor =
    earliest clip, single offset+drift fit. Report offset / drift / residual; a
    few-ms residual is sub-frame. Only surface a question if the lock is weak
@@ -80,9 +78,9 @@ in Phase 3, and how aggressively the exercise-overlap fork leans toward cutting.
 6. **Cut style.** Recommend `--cut-style markers` — FCP greys disabled (bladed)
    clips subtly and **hides their markers/tags**, so markers are the reliable,
    visible review surface.
-7. **Run:**
+7. **Run** (markers is already the CLI default):
    `WHISPER_MODEL=models/whisper-large-v3-turbo uv run main.py "<trainer_mic>"
-   --sync-ref "<session_folder>" --sync-mic "<client_lav>" --cut-style markers`
+   --sync-ref "<session_folder>" --sync-mic "<client_lav>" --labels labels.json`
 
 ## Phase 3 — ALWAYS visually verify (non-negotiable)
 
