@@ -89,7 +89,7 @@ end tell
 end timeout
 AS
 sleep 4
-# save sheet: folder via Command-Shift-G (Final Cut in front for a moment), then the name
+# save sheet: the name field already holds the project name; set the folder via Command-Shift-G (Final Cut in front for a moment)
 osascript - "$OUT" "$PR" <<'AS'
 on run argv
   with timeout of 120 seconds
@@ -98,39 +98,24 @@ on run argv
     tell process "Final Cut Pro"
       set frontmost to true
       delay 1.5
+      -- type the folder into the Go To box: `set value` does not register, keystrokes do
       keystroke "g" using {command down, shift down}
       delay 2.5
-      set sv to sheet 1 of window "Export File"
-      if (count of sheets of sv) > 0 then
-        repeat with e in entire contents of (sheet 1 of sv)
-          try
-            if role of e is "AXTextField" or role of e is "AXComboBox" then
-              set value of e to (item 1 of argv)
-              exit repeat
-            end if
-          end try
-        end repeat
-        delay 1
-        keystroke return
-        delay 3
-      end if
-      set nm to ""
-      set wh to ""
-      repeat with e in entire contents of window "Export File"
-        try
-          if role of e is "AXTextField" and name of e is "Save As:" then
-            set value of e to (item 2 of argv)
-            set nm to value of e
-          end if
-          if role of e is "AXPopUpButton" and name of e is "Where:" then set wh to value of e
-        end try
-      end repeat
+      keystroke (item 1 of argv)
+      delay 1.5
+      keystroke return
+      delay 3
     end tell
     if prev is not "Final Cut Pro" then tell process prev to set frontmost to true
-    return "name=[" & nm & "] where=[" & wh & "]"
   end tell
   end timeout
 end run
 AS
+# read the sheet back with the AX dump (entire contents of the sheet is empty while Final Cut is in the background)
+WH=$(python3 "$S/ax.py" "Export File" 12 2>/dev/null | grep "name=\[Where:\]" | sed 's/.*value=\[\([^]]*\)\].*/\1/')
+NM=$(python3 "$S/ax.py" "Export File" 12 2>/dev/null | grep "AXTextField name=\[Save As:\]" | sed 's/.*value=\[\([^]]*\)\].*/\1/')
+echo "where=[$WH] name=[$NM]"
+[ "$WH" = "$(basename "$OUT")" ] || { echo "folder is not $(basename "$OUT"); not saving"; exit 1; }
+[ "$NM" = "$PR.mp4" ] || [ "$NM" = "$PR" ] || echo "warning: name is [$NM]"
 "$S/clickname.sh" "Export File" "Save"
 echo "export started: $OUT/$PR.mp4 (watch Window > Background Tasks > Sharing)"
