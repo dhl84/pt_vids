@@ -161,9 +161,16 @@ The scripts print each form field they set, so check the `visibility:` line.
 `tools/youtube/my_playlists.mjs` lists the account's playlists with their IDs,
 and `playlist_items.mjs <PLAYLIST_ID>` lists the videos in one playlist.
 
-To get an earlier session back from YouTube: `yt-dlp` works for an unlisted
-video, but a private video needs the Studio download, because the browser
-cookies select the work account (`authuser=0`). Run
+An uploaded session already has a transcript: YouTube's auto captions. They
+are as good as whisper on this material, with speaker-change marks and no
+repeated-word loops. `node tools/youtube/captions.mjs <VIDEO_ID> out.srt`
+saves them through the signed-in browser (it switches the caption track on in
+the player and captures the response, because the raw caption URL needs a
+session token). About 6 of 16 old uploads had no captions; whisper covers those.
+
+To get the video itself back: `yt-dlp` works for an unlisted video, but a
+private video needs the Studio download, because the browser cookies select
+the work account (`authuser=0`). Run
 `node tools/youtube/studio_download.mjs <VIDEO_ID> <OUT_DIR>`; the file lands
 as `<title>.mp4` (720p).
 

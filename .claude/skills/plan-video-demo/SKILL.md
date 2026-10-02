@@ -179,7 +179,9 @@ report success. Never publish; private is the end state.
 
 ## Phase 6 — Record the workout for AtomaWOD
 
-Both lav transcripts are already on disk. Run
+Both lav transcripts are already on disk. For an earlier session that is on
+YouTube, skip whisper: `node tools/youtube/captions.mjs <VIDEO_ID> out.srt`
+saves the auto captions (whisper only when a video has none). Run
 `uv run tools/workout_scan.py digest <trainer.srt> --second <client.srt> --offset <intercept>`
 and read the digest. Write one record (`tools/workout_scan.py template`):
 
