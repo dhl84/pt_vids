@@ -162,6 +162,38 @@ were all hard-won and must stay automatic:
 (catches the double-encoding bug class). File URLs must be single-encoded
 (`pathname2url` only — never `quote()` on top).
 
+## Phase 5 — Upload the export to YouTube (private)
+
+The user exports the final cut from FCP to a local disk. Then run, from the
+repo root, with the file on the local disk (an upload from the NAS stalled):
+
+```sh
+node tools/youtube/upload_private.mjs "<export.mp4>" "<RMU|BMU> PT DD Mon YY" "<RMU PT|BMU PT>"
+node tools/youtube/set_private_when_ready.mjs "<RMU|BMU> PT DD Mon YY"
+```
+
+Ring sessions go to the `RMU PT` playlist, bar sessions to `BMU PT`. The
+scripts use the signed-in Brave Beta debug browser (`authenticated-browser`
+skill, port 9222, `authuser=1`). Read the `visibility:` log line before you
+report success. Never publish; private is the end state.
+
+## Phase 6 — Record the workout for AtomaWOD
+
+Both lav transcripts are already on disk. Run
+`uv run tools/workout_scan.py digest <trainer.srt> --second <client.srt> --offset <intercept>`
+and read the digest. Write one record (`tools/workout_scan.py template`):
+
+- `session` = the prescription, in the `pt-sessions/sessions.json` format of
+  the AtomaWOD repo. `start_time` from the DJI file name. Movement names and
+  variations must exist in the AtomaWOD catalogue (grep the migrations).
+- `actuals` = per-set rows: reps or duration, weight when stated, band colour,
+  pain and estimates in notes. Say when a count is an estimate.
+
+Hand the record to the AtomaWOD repo (`pt-sessions/actuals.json`, and a new
+`sessions.json` entry only when the date has none). The AtomaWOD scripts
+validate and dry-run; the user applies. Never edit an existing `sessions.json`
+entry: its source hash is the import contract.
+
 ## Gotchas baked in from experience
 
 - DJI clips carry **drop-frame embedded timecodes**; the FCPXML must set each

@@ -141,6 +141,63 @@ spans next to the mic as `mute_spans.json` (`[[start_s, end_s], …]`, timeline
 seconds) — `build_final_cut` picks the file up automatically and silences
 whichever mic plays inside each span.
 
+## After the edit: upload to YouTube (private, in a playlist)
+
+Export the final cut from Final Cut Pro to a local disk first. An upload that
+reads from the NAS stalled twice. Then run the two scripts in `tools/youtube/`.
+They drive the signed-in Brave Beta debug browser on port 9222 through the
+`authenticated-browser` skill, with `authuser=1` (the personal account).
+
+```sh
+# 1. upload: PRIVATE, not made for kids, added to the playlist; stays attached until the transfer ends
+node tools/youtube/upload_private.mjs "/path/RMU PT 30 Sep 26.mp4" "RMU PT 30 Sep 26" "RMU PT"
+# 2. after the checks finish (minutes to an hour), flip the row from Draft to Private
+node tools/youtube/set_private_when_ready.mjs "RMU PT 30 Sep 26"
+```
+
+Title pattern: `BMU PT DD Mon YY` or `RMU PT DD Mon YY`. Playlist names:
+`BMU PT` (bar muscle-up sessions) and `RMU PT` (ring muscle-up sessions).
+The scripts print each form field they set, so check the `visibility:` line.
+`tools/youtube/my_playlists.mjs` lists the account's playlists with their IDs,
+and `playlist_items.mjs <PLAYLIST_ID>` lists the videos in one playlist.
+
+To get an earlier session back from YouTube: `yt-dlp` works for an unlisted
+video, but a private video needs the Studio download, because the browser
+cookies select the work account (`authuser=0`). Run
+`node tools/youtube/studio_download.mjs <VIDEO_ID> <OUT_DIR>`; the file lands
+as `<title>.mp4` (720p).
+
+Set `CDP_MJS=file:///path/to/cdp.mjs` if the plugin moves; the default points
+at the installed `authenticated-browser` skill.
+
+## After the edit: record the workout in AtomaWOD
+
+The transcript holds the workout facts: sets, reps, loads, bands, holds and
+pain notes. `tools/workout_scan.py digest` filters a transcript down to those
+cues (about 150 lines for a session), with timestamps:
+
+```sh
+uv run tools/workout_scan.py digest "REC00001.srt" --second "REC00001 copy.srt" --offset 24.0
+uv run tools/workout_scan.py template   # the JSON skeleton to fill
+```
+
+A reviewer (Claude in session, or a person) writes one JSON record from the
+digest. The record has two parts, documented in the AtomaWOD repo
+(`pt-sessions/README.md`):
+
+- `session`: the prescription, one entry for `pt-sessions/sessions.json`.
+  `start_time` comes from the camera file name (`DJI_20260930103044` = 10:30).
+  Movement names and variations must exist in the AtomaWOD catalogue.
+- `actuals`: what happened, per set, one entry for `pt-sessions/actuals.json`.
+  Each set has `reps` or `duration_sec`, an optional `weight_kg`, and notes
+  (band colour, pain, estimates).
+
+Then, in the AtomaWOD repo: append the parts to the two files, run the
+importer dry run, then `log-pt-actuals.ts` dry run, and apply both only after
+you read the plans. An existing `sessions.json` entry stays byte-identical;
+its source hash is the contract. Corrections to an imported session go through
+the app or a reviewed repair script, never through an edited entry.
+
 ## How sync works
 
 The mic and camera run on independent clocks, so the mic's t=0 is not the
