@@ -141,9 +141,27 @@ spans next to the mic as `mute_spans.json` (`[[start_s, end_s], …]`, timeline
 seconds) — `build_final_cut` picks the file up automatically and silences
 whichever mic plays inside each span.
 
+## After the edit: export from Final Cut Pro by script
+
+`tools/fcp/export_project.sh` imports the final cut into the PT library
+(`~/Movies/Untitled.fcpbundle`), opens the project and exports HEVC 8-bit
+3840x2160 to `~/Movies`. It drives Final Cut Pro through accessibility in the
+background; the Command-E step brings Final Cut to the front for about ten
+seconds. Give the project a unique name first, because the library keeps the
+old projects:
+
+```sh
+sed 's/<project name="[^"]*"/<project name="RMU PT 30 Sep 26"/' final_cut_dissolves.fcpxml > "RMU PT 30 Sep 26.fcpxml"
+tools/fcp/export_project.sh "RMU PT 30 Sep 26.fcpxml" "RMU PT 30 Sep 26"
+```
+
+Watch Window > Background Tasks > Sharing for the progress. A 53 minute 4K
+export is about 15 GB. The save sheet remembers the last folder, so the script
+sets the folder each time.
+
 ## After the edit: upload to YouTube (private, in a playlist)
 
-Export the final cut from Final Cut Pro to a local disk first. An upload that
+Upload from a local disk. An upload that
 reads from the NAS stalled twice. Then run the two scripts in `tools/youtube/`.
 They drive the signed-in Brave Beta debug browser on port 9222 through the
 `authenticated-browser` skill, with `authuser=1` (the personal account).
