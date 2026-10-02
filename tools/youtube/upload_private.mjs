@@ -33,14 +33,15 @@ await click(`[...document.querySelectorAll('ytcp-uploads-dialog tp-yt-paper-radi
 log('visibility:', await c.eval(`JSON.stringify([...document.querySelectorAll('ytcp-uploads-dialog tp-yt-paper-radio-button')].filter(${vis}).map(r => [r.innerText.replace(/\\s+/g,' ').trim().slice(0,12), r.getAttribute('aria-checked')]))`));
 log('link:', await c.eval(`document.querySelector('ytcp-uploads-dialog a[href*="youtu.be"]')?.href`));
 await click(`[...document.querySelectorAll('ytcp-uploads-dialog ytcp-button, ytcp-uploads-dialog button')].filter(${vis}).find(e => /^Save$/i.test(e.innerText.trim()))`, 3000);
-// stay attached until the transfer really ends: progress label says complete AND no upload requests for 3 minutes
-let idle = 0;
+// stay attached until the transfer really ends: judge by the progress label, not by the resource-timing
+// buffer (it caps at 250 entries, so "no requests" is false after ~20 minutes of a large upload)
+let last = '', same = 0;
 for (let i = 0; i < 360; i++) {
-  const s = JSON.parse(await c.eval(`JSON.stringify({ p: (document.querySelector('ytcp-video-upload-progress')?.innerText || document.querySelector('ytcp-uploads-dialog .progress-label')?.innerText || '').replace(/\\s+/g,' ').trim().slice(0,90), reqs3m: performance.getEntriesByType('resource').filter(r => /upload|resumable/i.test(r.name) && performance.now() - r.responseEnd < 180000).length })`));
-  if (i % 3 === 0) log('progress:', s.p, 'reqs3m=' + s.reqs3m);
-  const done = /upload complete|processing complete|Checks/i.test(s.p) && !/Uploading/i.test(s.p);
-  if (done && s.reqs3m === 0 && i > 2) { log('DONE:', s.p); break; }
-  if (s.reqs3m === 0 && /Uploading/i.test(s.p)) { idle++; if (idle >= 12) { log('STALLED at', s.p); process.exit(2); } } else idle = 0;
+  const p = (await c.eval(`(document.querySelector('ytcp-video-upload-progress')?.innerText || document.querySelector('ytcp-uploads-dialog .progress-label')?.innerText || '').replace(/\\s+/g,' ').trim().slice(0,90)`)) || '';
+  if (i % 3 === 0) log('progress:', p);
+  if (/upload complete|processing complete|checks/i.test(p) && !/uploading/i.test(p)) { log('DONE:', p); break; }
+  same = p === last ? same + 1 : 0; last = p;
+  if (same >= 12 && /uploading/i.test(p)) { log('STALLED at', p); process.exit(2); }
   await sleep(60000);
 }
 process.exit(0);
