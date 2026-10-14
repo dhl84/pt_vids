@@ -144,7 +144,7 @@ whichever mic plays inside each span.
 ## After the edit: export from Final Cut Pro by script
 
 `tools/fcp/export_project.sh` imports the final cut into the PT library
-(`~/Movies/Untitled.fcpbundle`), opens the project and exports HEVC 8-bit
+(`~/Movies/PT.fcpbundle`), opens the project and exports HEVC 8-bit
 3840x2160 to `~/Movies`. It drives Final Cut Pro through accessibility in the
 background; the Command-E step brings Final Cut to the front for about ten
 seconds. Give the project a unique name first, because the library keeps the
