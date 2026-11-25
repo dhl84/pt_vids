@@ -466,13 +466,14 @@ def build_applied(tl: Timeline, out_path: Path,
             add_transition(new_off)
         seg = ET.SubElement(spine, "asset-clip", ref=ref, offset=T.frames(new_off),
                             name=name, duration=T.frames(b1 - b0),
-                            start=T.frames(host_start), tcFormat=tcfmt,
-                            srcEnable="video")   # drop DJI camera audio (some FCP
-                                                 # versions ignore this attribute)
-        # belt-and-suspenders: force the camera audio to silence — adjust-volume
-        # is always honored on import, unlike srcEnable. Must come before the
-        # nested (anchored) lav clips per the DTD content model.
-        ET.SubElement(seg, "adjust-volume", amount="-96dB")
+                            start=T.frames(host_start), tcFormat=tcfmt)
+        # The camera audio plays only where no lav covers the span (the recorders
+        # stopped before the camera) and the span is not muted. Elsewhere it is
+        # dropped: srcEnable is ignored by some FCP versions, adjust-volume is
+        # always honored. It must come before the nested lav clips (DTD order).
+        if is_muted(b0) or any(ms <= b0 and b1 <= me for _, ms, me in mics):
+            seg.set("srcEnable", "video")
+            ET.SubElement(seg, "adjust-volume", amount="-96dB")
         for i, (a, ms, me) in enumerate(mics):
             if ms <= b0 and b1 <= me:
                 # drift-corrected mic in-point: rec_s = (timeline_s - offset)/slope
