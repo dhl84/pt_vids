@@ -1,7 +1,7 @@
 // usage: node playlist_items.mjs PLAYLIST_ID -- prints id|title|length for every video in the signed-in account's playlist (authuser=1)
 const { newTab, connect } = await import(process.env.CDP_MJS ?? `file:///Users/davidlee/.claude/plugins/cache/ledgerrocket-plugins/ledgerrocket-workflows/1.72.0/skills/authenticated-browser/scripts/cdp.mjs`);
 const [PL] = process.argv.slice(2); const sleep = ms => new Promise(r => setTimeout(r, ms));
-const tab = await newTab(`https://www.youtube.com/playlist?list=${PL}&authuser=1`);
+const tab = await newTab(`https://www.youtube.com/playlist?list=${PL}&authuser=${process.env.YT_AUTHUSER ?? 1}`);
 const c = connect(tab.webSocketDebuggerUrl); await c.ready; await c.send('Runtime.enable');
 await sleep(7000);
 for (let i = 0; i < 15; i++) { await c.eval('window.scrollTo(0, document.documentElement.scrollHeight)'); await sleep(1200); }

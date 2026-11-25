@@ -4,7 +4,7 @@ const TITLES = process.argv.slice(2); const sleep = ms => new Promise(r => setTi
 const vis = `e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }`;
 const pending = new Set(TITLES);
 for (let i = 0; i < 100 && pending.size; i++) {
-  const t = await newTab('https://studio.youtube.com/channel/UCMmL2oJrsyYiVlveL1ThoDw/videos/upload?authuser=1');
+  const t = await newTab(`https://studio.youtube.com/channel/UCMmL2oJrsyYiVlveL1ThoDw/videos/upload?authuser=${process.env.YT_AUTHUSER ?? 1}`);
   const c = connect(t.webSocketDebuggerUrl); await c.ready; await c.send('Runtime.enable');
   for (let k = 0; k < 20; k++) { await sleep(1500); if (await c.eval(`document.querySelectorAll('ytcp-video-row').length > 0`)) break; }
   const click = async (expr, wait = 1200) => { const b = await c.eval(`(() => { const e = ${expr}; if (!e) return null; e.scrollIntoView({block:'center'}); const r = e.getBoundingClientRect(); return {x: r.x + r.width/2, y: r.y + r.height/2}; })()`); if (!b) return null; await c.send('Input.dispatchMouseEvent', {type:'mouseMoved', x: b.x, y: b.y}); await sleep(300); for (const type of ['mousePressed','mouseReleased']) await c.send('Input.dispatchMouseEvent', {type, x: b.x, y: b.y, button: 'left', clickCount: 1}); await sleep(wait); return b; };

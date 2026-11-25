@@ -6,7 +6,7 @@ import { writeFileSync } from 'node:fs';
 const PORT = process.env.CDP_PORT || 9222;
 const [VID, OUT] = process.argv.slice(2);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const tab = await (await fetch(`http://127.0.0.1:${PORT}/json/new?${encodeURIComponent(`https://www.youtube.com/watch?v=${VID}&authuser=1`)}`, { method: 'PUT' })).json();
+const tab = await (await fetch(`http://127.0.0.1:${PORT}/json/new?${encodeURIComponent(`https://www.youtube.com/watch?v=${VID}&authuser=${process.env.YT_AUTHUSER ?? 1}`)}`, { method: 'PUT' })).json();
 const ws = new WebSocket(tab.webSocketDebuggerUrl);
 await new Promise(r => ws.onopen = r);
 let id = 0; const pending = new Map(); const timedtext = [];

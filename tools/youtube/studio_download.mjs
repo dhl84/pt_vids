@@ -2,7 +2,7 @@
 const { newTab, connect } = await import(process.env.CDP_MJS ?? `file:///Users/davidlee/.claude/plugins/cache/ledgerrocket-plugins/ledgerrocket-workflows/1.72.0/skills/authenticated-browser/scripts/cdp.mjs`);
 const [VID, OUT] = process.argv.slice(2); const sleep = ms => new Promise(r => setTimeout(r, ms));
 const vis = `e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }`;
-const t = await newTab(`https://studio.youtube.com/video/${VID}/edit?authuser=1`);
+const t = await newTab(`https://studio.youtube.com/video/${VID}/edit?authuser=${process.env.YT_AUTHUSER ?? 1}`);
 const c = connect(t.webSocketDebuggerUrl); await c.ready; await c.send('Runtime.enable'); await c.send('Page.enable');
 await c.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: OUT, eventsEnabled: true }).catch(e => console.log('setDownloadBehavior:', e.message));
 await sleep(8000);

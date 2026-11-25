@@ -1,6 +1,6 @@
 // usage: node my_playlists.mjs -- lists ALL the signed-in account's playlists (private included) from the Library feed
 const { newTab, connect } = await import(process.env.CDP_MJS ?? `file:///Users/davidlee/.claude/plugins/cache/ledgerrocket-plugins/ledgerrocket-workflows/1.72.0/skills/authenticated-browser/scripts/cdp.mjs`);
-const tab = await newTab('https://www.youtube.com/feed/playlists?authuser=1');
+const tab = await newTab(`https://www.youtube.com/feed/playlists?authuser=${process.env.YT_AUTHUSER ?? 1}`);
 const c = connect(tab.webSocketDebuggerUrl); await c.ready; await c.send('Runtime.enable');
 await new Promise(r => setTimeout(r, 7000));
 console.log('href:', await c.eval('location.href'));
